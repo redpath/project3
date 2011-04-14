@@ -1,5 +1,5 @@
 CC = gcc
-CCFLAGS = -lssl -g
+CCFLAGS = -lssl -g -lpthread
 all: client server
 client: client.c header.h
 	$(CC) $(CCFLAGS) client.c -o client

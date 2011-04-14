@@ -26,6 +26,9 @@ header.h
 #include <time.h>
 #include <signal.h>
 
+#include <pthread.>
+#include <errno.h>
+
 #define MAXFNLEN 256
 #define MAXDIRLEN 256
 #define HEADERSZ 24
