@@ -12,6 +12,9 @@ client.c
 */
 #include "header.h"
 
+pthread_mutex_t count_mutex     = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t condition_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 MetaStruct * CreateMetaStruct(int filnamesz, char * filename, time_t tm)
 {
 	MetaStruct * met = (MetaStruct*)malloc(sizeof(MetaStruct));
@@ -420,10 +423,27 @@ void SendKeepAlive(int sockfd)
   memcpy((void*)(keepbuf + 2), (void*)&keepal, 2);
   write(sockfd, keepbuf, 4);
 }
+
+test[20];
+void *tester()
+{
+	int x=1;
+	while(1)
+	{
+	pthread_mutex_lock( &condition_mutex );
+		 printf("before %s\n",test);
+		x++;
+         pthread_cond_wait( &condition_cond, &condition_mutex );
+      printf("the current value of it is %s\n",test);
+      pthread_mutex_unlock( &condition_mutex );
+	}
+	
+}
+
 int main(int argc, char** argv)
 {
 
-	int sockfd, portno;
+	int send_sockfd, rec_sockfd, portno;
 	char * dirname;
 	int chunksz;
 
@@ -438,10 +458,17 @@ int main(int argc, char** argv)
 
 	int stopcount = 5;
 
+	pthread_t thread1, thread2;
+
+	pthread_create( &thread1, NULL, &tester, NULL);
+
 	FILE * file;
 	DIR * directory;
 
 	FileTimesList * mainlist = CreateTimeList();
+
+pthread_join( thread1, NULL); 	
+
 
     if (argc < 5) 
 	{	
@@ -455,9 +482,12 @@ int main(int argc, char** argv)
 		chunksz = atoi(argv[4]);
 	}
 
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+    if ((send_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
         error("opening socket\n");
-    
+  
+    if ((rec_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+        error("opening socket\n");
+  
     if ((servername = gethostbyname(argv[1])) == NULL) 
         error("no such host\n");
 	
@@ -468,24 +498,27 @@ int main(int argc, char** argv)
 	
 	serv_addr.sin_port = htons(portno);
 	
-    if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
-        error("connecting\n");
-	
+    if (connect(send_sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
+        error("connecting sender\n");
+
+    if (connect(rec_sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
+        error("connecting receiver\n");
+
 	directory = opendir(dirname);//Open data directory
-	AcceptFile(sockfd, dirname); //take the incoming meta-data
+	AcceptFile(send_sockfd, dirname); //take the incoming meta-data
 	AccumulateFileList(directory, mainlist);//Create File List
 	MetaListUpdate(mainlist);//Update the newly created File List according to the metadata
 	
-    UpdateServerFiles(mainlist, sockfd, chunksz, dirname);//Update the files on the server
+    UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);//Update the files on the server
 	
 	if(timeout != 0)
 	{ 
 		while(timeout > 0)
 		{
 			sleep(20);
-			SendKeepAlive(sockfd);
+			SendKeepAlive(send_sockfd);
 			AccumulateFileList(directory, mainlist);
-			UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
+			UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);
 	    
 			timeout -= 20;
 		}
@@ -495,9 +528,9 @@ int main(int argc, char** argv)
 		while(1)
 		{
 			sleep(20);
-			SendKeepAlive(sockfd);
+			SendKeepAlive(send_sockfd);
 			AccumulateFileList(directory, mainlist);
-			UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
+			UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);
 		}
 	}
 	    
