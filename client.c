@@ -423,7 +423,7 @@ void SendKeepAlive(int sockfd)
   memcpy((void*)(keepbuf + 2), (void*)&keepal, 2);
   write(sockfd, keepbuf, 4);
 }
-
+/*
 test[20];
 void *tester()
 {
@@ -439,7 +439,79 @@ void *tester()
 	}
 	
 }
+void *tester2()
+{
+	while(1)
+	{
+	pthread_mutex_lock( &condition_mutex );
+	
+	
+	scanf("%s",test);
+	
+	  
+	pthread_mutex_unlock( &condition_mutex );
+	pthread_cond_signal( &condition_cond );
+	
+	scanf("%s",test);
+	}
+	return NULL;
+}
+*/
+/*
+void set_up_connection(void * arg)
+{
+	int send_sockfd, rec_sockfd, portno;
+	char * dirname;
+	int chunksz;
 
+	struct sockaddr_in serv_addr;
+	struct hostent * servername;
+	char * buffer;
+	
+	int timeout = 80;//seconds client will run for
+
+	char abortbuf[4];
+	char mdsig[16];
+
+	int stopcount = 5;
+
+	set_up_connection(send_sockfd, &serv_addr, &servername, portno);
+
+	FILE * file;
+	DIR * directory;
+
+	FileTimesList * mainlist = CreateTimeList();
+
+    if (argc < 5) 
+	{	
+       fprintf(stderr,"Usage: %s <hostname> <port> <directory name> <chunksize>\n", argv[0]);
+		exit(0);
+	}
+    else
+	{	
+		portno = atoi(argv[2]);
+		dirname = argv[3];
+		chunksz = atoi(argv[4]);
+	}
+
+    if ((send_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+        error("opening socket\n");
+  
+    if ((servername = gethostbyname(argv[1])) == NULL) 
+        error("no such host\n");
+	
+    memset((char *) &serv_addr, 0, sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	
+	memcpy((char *)&serv_addr.sin_addr.s_addr,(char *)servername->h_addr, servername->h_length);
+	
+	serv_addr.sin_port = htons(portno);
+	
+    if (connect(send_sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
+        error("connecting sender\n");
+
+}
+*/
 int main(int argc, char** argv)
 {
 
@@ -458,16 +530,14 @@ int main(int argc, char** argv)
 
 	int stopcount = 5;
 
-	pthread_t thread1, thread2;
-
-	pthread_create( &thread1, NULL, &tester, NULL);
+	set_up_connection(send_sockfd, &serv_addr, &servername, portno);
 
 	FILE * file;
 	DIR * directory;
 
 	FileTimesList * mainlist = CreateTimeList();
 
-pthread_join( thread1, NULL); 	
+
 
 
     if (argc < 5) 
@@ -485,9 +555,6 @@ pthread_join( thread1, NULL);
     if ((send_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
         error("opening socket\n");
   
-    if ((rec_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
-        error("opening socket\n");
-  
     if ((servername = gethostbyname(argv[1])) == NULL) 
         error("no such host\n");
 	
@@ -501,14 +568,16 @@ pthread_join( thread1, NULL);
     if (connect(send_sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
         error("connecting sender\n");
 
-    if (connect(rec_sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
-        error("connecting receiver\n");
+
 
 	directory = opendir(dirname);//Open data directory
 	AcceptFile(send_sockfd, dirname); //take the incoming meta-data
 	AccumulateFileList(directory, mainlist);//Create File List
-	MetaListUpdate(mainlist);//Update the newly created File List according to the metadata
+	MetaListUpdate(mainlist);//Update the newly created File List 
+							 //according to the metadata
 	
+
+
     UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);//Update the files on the server
 	
 	if(timeout != 0)
@@ -537,3 +606,12 @@ pthread_join( thread1, NULL);
 	
 	return 0;
 }
+
+
+	//pthread_t thread1, thread2;
+
+	//pthread_create( &thread1, NULL, &tester, NULL);
+    //pthread_create( &thread2, NULL, &tester2, NULL);
+
+   // pthread_join( thread1, NULL);
+   // pthread_join( thread2, NULL);

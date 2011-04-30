@@ -26,7 +26,7 @@ header.h
 #include <time.h>
 #include <signal.h>
 
-#include <pthread.>
+#include <pthread.h>
 #include <errno.h>
 
 #define MAXFNLEN 256
@@ -34,6 +34,8 @@ header.h
 #define HEADERSZ 24
 #define MD5SZ 16
 #define CODESZ 4
+
+pthread_cond_t  condition_cond  = PTHREAD_COND_INITIALIZER;
 
 char STOK [4] = {2,0,1,0}; 
 char RSND[4]= 	{2,0,2,0};
