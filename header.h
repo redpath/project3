@@ -87,14 +87,16 @@ typedef struct Meta_Struct
 	int file_size;
 	time_t modified_time;
 	unsigned char update_status; // 1: Updated ; 0: Not updated
+	pthread_mutex_t mutex;
 		
 }MetaStruct;
 
-typedef struct File_Time_Node { // A node used in keeping track of file updates
+typedef struct File_Time_Node { // A node used in keeping track of file updates. DW: Added mutex for updating.
 	
 	char * filename;
 	time_t time;
 	int new;
+	pthread_mutex_t mutex;
 	struct File_Time_Node * next;
 }FileTimeNode;
 

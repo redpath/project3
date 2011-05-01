@@ -4,15 +4,19 @@
 (_//_// // / / \/_'/_//_//_|/ / / *
                      /   
 (John Redpath)
+Dave Weiss
 01:198:352
 SP2011
-Lab 2
+Lab 3
 
 server.c
 */
 #include "header.h"
 
 volatile sig_atomic_t exitvar = 0; //Exit variable used by alarm in main
+int counter = 0;
+pthread_mutex_t counterLock;
+FileTimesList * mainlist;
 
 MetaStruct * CreateMetaStruct(int filnamesz, char * filename, time_t tm)
 {
@@ -20,6 +24,8 @@ MetaStruct * CreateMetaStruct(int filnamesz, char * filename, time_t tm)
 	strcpy(met->filename,filename);
 	met->filenamesz = filnamesz;
 	met->modified_time = tm;
+	/*Initialize the mutex for the metadata struct.*/
+	pthread_mutex_init(&met->mutex,0);
 	return met;
 }
 
@@ -434,53 +440,14 @@ void exit_prog(int signum)
   exitvar = 1;
   signal(SIGALRM, exit_prog);
 }
-int main(int argc, char** argv)
-{
-	int sockfd,newsockfd, portno;
-	struct sockaddr_in serv_addr, cli_addr;
-	socklen_t clientlen;
-	char * dirname;
-	
-	int aerr;
-
-	FILE * file;
+void *handleClient(int newsockfd,FileTimesList *mainlist,char *dirname){
 	DIR * directory;
-
-	FileTimesList * mainlist = CreateTimeList();
 	
-
-    if (argc < 3) 
-	{	
-       fprintf(stderr,"Usage: %s<port> <directory name>\n", argv[0]);
-		exit(0);
-	}
-    else
-	{	
-		portno = atoi(argv[1]);
-		dirname = argv[2];
-	}
-
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
-        error("opening socket\n");
-	
-    memset((char *) &serv_addr, 0, sizeof(serv_addr));
-	
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = INADDR_ANY;
-	serv_addr.sin_port = htons(portno);
-	
-    if ((bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))) < 0)
-        error("binding");
-
-	listen(sockfd, 5);
-	clientlen = sizeof(cli_addr);
-	
-	if ((newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clientlen))< 0)
-        error("accept");
-
-
+	FILE * file;
+	int aerr;
 	signal(SIGALRM, exit_prog);
-	directory = opendir("data");//Open data directory
+	
+	directory = opendir(dirname);//Open data directory
 	AccumulateFileList(directory, mainlist);
 	UpdateMetaFile(mainlist);
 
@@ -507,8 +474,106 @@ int main(int argc, char** argv)
 		}
 	    
 	} //end while
+}
+void *listenReceive(void * port){
+	int portno = *((int*) port);
+	int sockfd,newsockfd;
+	int running = 1;
+	pthread_t clients[6];
+	
+	char * dirname = "data";
+	struct sockaddr_in serv_addr, cli_addr;
+	socklen_t clientlen;
+	printf("REC:attempting to open socket.\t%d\n",__LINE__);
+	if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+        	error("opening socket\n");
+	
+    memset((char *) &serv_addr, 0, sizeof(serv_addr));
+	
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = INADDR_ANY;
+	serv_addr.sin_port = htons(portno);
+	printf("REC:Attempting to open on port %d\t%d\n",portno,__LINE__);
+    if ((bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))) < 0)
+        error("binding");
+	printf("REC: Waiting on clients.\n");
+	while(running){
+		listen(sockfd, 5);
+		clientlen = sizeof(cli_addr);
+		if ((newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clientlen))< 0){
+        		error("accept");
+		}else{
+			/*Spawn the client handler threads.*/
+			printf("REC: Client Connected.\n");
+			pthread_create(&clients[counter],0,handleClient(newsockfd,mainlist,dirname),NULL);
+			counter++;
+			
+		}
+	
+	}
+}
+
+void *listenSend(void * port){
+	int portno = *((int*) port);
+	int sockfd,newsockfd;
+	int running = 1;
+	pthread_t clients[6];
+	char * dirname = "data";
+	struct sockaddr_in serv_addr, cli_addr;
+	socklen_t clientlen;
+	 printf("SEND:Attempting to open socket.\t%d",__LINE__);
+	 if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+        	error("opening socket\n");
+	
+    memset((char *) &serv_addr, 0, sizeof(serv_addr));
+	
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = INADDR_ANY;
+	serv_addr.sin_port = htons(portno);
+	printf("\nSEND: Attempting open on port %d\t%d\n",portno,__LINE__);
+    if ((bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))) < 0)
+        error("binding");
+	printf("SEND: Waiting on clients.\n");
+	while(running){
+		listen(sockfd, 5);
+		clientlen = sizeof(cli_addr);
+		if ((newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clientlen))< 0){
+        		error("accept");
+		}else{
+			/*Spawn the client handler threads.*/
+			printf("SEND:Client connected. Spawning thread.\n");
+			pthread_create(&clients[counter],0,handleClient(newsockfd,mainlist,dirname),NULL);
+			counter++;
+		}
+	
+	}
+}
+
+int main(int argc, char** argv)
+{
+	mainlist = CreateTimeList();
+	pthread_t listen,send;	
+	int sockfd,newsockfd, sportno,rportno;
+	pthread_mutex_init(&counterLock,0);
+    if (argc < 3) 
+	{	
+       fprintf(stderr,"Usage: %s<sendport> <receiveport>\n", argv[0]);
+		exit(0);
+	}
+    else
+	{	
+		sportno = atoi(argv[1]);
+		rportno = atoi(argv[2]);
+		
+	}
+	
+	/*Spawn the two threads for listening.*/
+    	pthread_create(&send,0,listenSend,&sportno);
+	printf("Send thread was spawned.");
+   	pthread_create(&listen,0,listenReceive,&rportno);
 	
 	printf("Server has exited due to client inactivity\n");
-
+	pthread_join(listen,NULL);
+	pthread_join(send,NULL);
 	return 0;
 }
