@@ -12,12 +12,166 @@ Lab 3
 server.c
 */
 #include "header.h"
-
 volatile sig_atomic_t exitvar = 0; //Exit variable used by alarm in main
 int counter = 0;
 pthread_mutex_t counterLock;
-FileTimesList * mainlist;
+FileTimesList *mainlist;
+const int SEND = 0;
+const int REC = 1;
+const int CHUNKSIZE = 500;
+typedef struct threadData{
+	int newsockfd;
+	FileTimesList *mainlist;
+	char *dirname;
 
+} *ThreadData;
+/*typedef struct job_{
+	char filename[500][100];
+	int count;
+} *job;*/
+typedef struct node_{
+	MetaStruct *value;/*hold a job value pointer.*/
+	struct node_ *next;
+} *node;
+typedef struct queue_{
+	node head;
+	node tail;
+	int items;
+	pthread_mutex_t mutex;/*Mutex for keeping track if this is being used.*/
+} *queue;
+typedef struct client_{
+	int sendSocket;/*The socket that this user has*/
+	int recSocket;/*the receive socket that is receieving.*/
+	queue pendingJobs;/*currently pending jobs.*/
+	
+} *client;
+typedef struct clients_{
+     client clients[2000];
+     pthread_mutex_t mutex;
+     int size;
+} *clients;
+/*Function declarations*/
+clients connectedClients;
+queue createQueue();
+void destroyQueue(queue);
+
+int clientExists(int sockfd,int from){/*check if the client exists.*/
+	int counter = 0;
+	int foundIndex = -1;
+	printf("Attempting to lock connected clients mutex: %d\n",__LINE__);
+	pthread_mutex_lock(&connectedClients->mutex);
+	while(counter < connectedClients->size){
+		if(from == SEND){
+			if(connectedClients->clients[counter]->sendSocket == sockfd){
+				foundIndex = counter;
+			}
+		}
+		if(from == REC){
+			if(connectedClients->clients[counter]->recSocket == sockfd){
+				foundIndex = counter;
+			}
+		}
+		counter++;	
+	}
+	printf("Attempting to unlock connected clients mutex: %d\n",__LINE__);
+	pthread_mutex_unlock(&connectedClients->mutex);
+	return foundIndex;
+}
+int clientRemove(int sockfd){
+	int foundIndex = clientExists(sockfd,SEND);
+	if(foundIndex < 0){
+		foundIndex = clientExists(sockfd,REC);
+	}
+	client temp;
+	if(foundIndex >= 0){
+		/*Shift the array*/
+		printf("Attempting to lock connected clients mutex: %d\n",__LINE__);
+		pthread_mutex_lock(&connectedClients->mutex);
+		destroyQueue(connectedClients->clients[foundIndex]->pendingJobs);
+		while(foundIndex < connectedClients->size){
+			if((foundIndex +1) < connectedClients->size){
+				temp = connectedClients->clients[foundIndex + 1];
+				connectedClients->clients[foundIndex] = temp;
+			}
+			foundIndex++;
+		}
+		connectedClients->clients[foundIndex] = 0;
+		connectedClients->size--;/*Decrement the size*/
+		printf("Attempting to unlock connected clients mutex: %d\n",__LINE__);
+		pthread_mutex_unlock(&connectedClients->mutex);
+		return 0;
+	}else{
+		return -1;
+	}
+}
+int clientAdd(int sockfd,int from){/*Add a client to the client list.*/
+	int foundIndex = clientExists(sockfd,from);
+	if(from == SEND){
+		if(foundIndex < 0) {/*Client was not found already found*/
+			printf("Attempting to lock connected clients mutex: %d\n",__LINE__);
+			pthread_mutex_lock(&connectedClients->mutex);
+				connectedClients->clients[connectedClients->size]->sendSocket = sockfd;
+				connectedClients->clients[connectedClients->size]->pendingJobs = createQueue();
+			printf("Attempting to unlock connected clients mutex: %d\n",__LINE__);
+			pthread_mutex_unlock(&connectedClients->mutex);
+		}
+	}
+	
+
+	if(from == REC){
+		printf("Attempting to lock connected clients mutex: %d\n",__LINE__);
+		pthread_mutex_lock(&connectedClients->mutex);
+			connectedClients->clients[connectedClients->size]->recSocket = sockfd;
+		printf("Attempting to unlock connected clients mutex: %d\n",__LINE__);
+		pthread_mutex_unlock(&connectedClients->mutex);
+	}
+	
+}
+queue createQueue(){/*Returns a queue pointer*/
+	queue jobs = (queue)calloc(1,sizeof(struct queue_)); 
+	jobs->head = NULL;
+	jobs->tail = NULL;
+	pthread_mutex_init(&jobs->mutex,0);/*Initialize the mutex*/ 
+	return jobs;
+}
+void enqueue(queue orders, MetaStruct *order){/*Add a book order to the queue*/
+	node temp;
+	if(orders->head ==NULL){
+		orders->head = (node)calloc(1,sizeof(struct node_));
+		orders->head->value = order;
+		orders->head->next = NULL;
+		orders->tail = orders->head;
+		
+	}  else{
+		temp = (node)calloc(1,sizeof(struct node_));
+		temp->value = order;
+		temp->next = NULL;
+		orders->tail->next = temp;
+		orders->tail = temp;/*set newest item as the tail*/
+	}
+	orders->items++;
+}
+node dequeue(queue orders){/*take off the front of the line*/
+	if(orders->head == NULL){
+		return NULL;
+	}
+	node temp= orders->head;/*Take off the current head*/
+	orders->head = orders->head->next;
+	temp->next = NULL;
+	orders->items--;
+	return temp;
+	
+	
+}
+void destroyQueue(queue orders){
+	int i;
+	node temp;
+	while((temp = dequeue(orders)) != NULL){
+		temp->value = NULL;
+		free(temp);
+	}
+	free(orders);
+}
 MetaStruct * CreateMetaStruct(int filnamesz, char * filename, time_t tm)
 {
 	MetaStruct * met = (MetaStruct*)malloc(sizeof(MetaStruct));
@@ -134,6 +288,7 @@ void UpdateMetaFile(FileTimesList * list) // This function creates a metafile gi
 	int bt;
 	FileTimeNode * ptr = list->head;
 	char filepath[25] = "data/META-DATA";
+
 	meta = fopen(filepath, "wb");
 	if(meta == NULL)
 	{
@@ -142,6 +297,7 @@ void UpdateMetaFile(FileTimesList * list) // This function creates a metafile gi
 	while(ptr != NULL)
 	{
 		met = CreateMetaStruct(strlen(ptr->filename) + 1, ptr->filename, ptr->time);
+		ptr->metadata = met;
 		bt = fwrite((void*)met, sizeof(MetaStruct), 1, meta);
 		fflush(stdout);
 		ptr = ptr->next; 
@@ -164,7 +320,6 @@ int SendFile(char * filename, int sockfd, int chunksz, short int filsz, char * d
 	char * chunkbuf;
 	char * buffer;
 	char finbuf[4];
-	
 	short int status = 0;
 	int sockrep;
 	char statusbuffer[4];
@@ -276,7 +431,6 @@ int AcceptFile(int newsockfd, char * dirname)
 	char mdval[16];
 	short int type;
 	unsigned char mdsig[16];
-	
 	short int filenamesz;
 	char * filename;
 	char * chunk;
@@ -440,21 +594,21 @@ void exit_prog(int signum)
   exitvar = 1;
   signal(SIGALRM, exit_prog);
 }
-void *handleClient(int newsockfd,FileTimesList *mainlist,char *dirname){
-	DIR * directory;
-	
+void *receiveThread(void *datastruct){
+	DIR * directory;	
 	FILE * file;
-	int aerr;
+	int aerr;	
+	ThreadData threadData = (ThreadData)datastruct;
+	char *dirname = threadData->dirname;
+	int newsockfd = threadData->newsockfd;
 	signal(SIGALRM, exit_prog);
-	
 	directory = opendir(dirname);//Open data directory
 	AccumulateFileList(directory, mainlist);
 	UpdateMetaFile(mainlist);
-
 	SendFile("data/META-DATA", newsockfd, 64, 15, dirname);
-	
 	while(exitvar==0)
 	{ 
+	    UpdateMetaFile(mainlist);
 	    aerr = AcceptFileUpdates(newsockfd, dirname);
 	    if(aerr == 0)
 		{
@@ -474,13 +628,52 @@ void *handleClient(int newsockfd,FileTimesList *mainlist,char *dirname){
 		}
 	    
 	} //end while
+	/*Client has timed out so we remove him from the list.*/
+	
+}
+void *sendThread(void *datastruct){
+	ThreadData threadData = (ThreadData)datastruct;
+	char *dirname = threadData->dirname;
+	int newsockfd = threadData->newsockfd;
+	node temp;
+	signal(SIGALRM, exit_prog);
+	
+	while(exitvar==0)/*Check if there this user has a job to do. that has a job to do.*/
+	{ 
+	   int foundIndex = clientExists(newsockfd, SEND);
+	   if(foundIndex >= 0){
+		   printf("Locking pendingJobs mutex: %d\n",__LINE__);
+		   pthread_mutex_lock(&connectedClients->clients[foundIndex]->pendingJobs->mutex);
+			if(connectedClients->clients[foundIndex]->pendingJobs->items > 0){
+				while((temp = dequeue(connectedClients->clients[foundIndex]->pendingJobs)) != NULL){
+					SendFile(temp->value->filename, newsockfd, CHUNKSIZE, temp->value->file_size, dirname);
+				}
+			}
+		   printf("Unlocking pendingJobs mutex: %d\n",__LINE__);
+			pthread_mutex_unlock(&connectedClients->clients[foundIndex]->pendingJobs->mutex);
+	   }
+	    if(AcceptKeepAlive(newsockfd) == 1)
+		{
+			alarm(30);
+		}
+	    else if(AcceptKeepAlive(newsockfd) == -1) {		}
+
+	    else
+		{
+			perror("Invalid message");
+			exit(1);
+		}
+	    
+	} //end while
+	/*Client has timed out so remove him*/
+	clientRemove(newsockfd);
 }
 void *listenReceive(void * port){
 	int portno = *((int*) port);
 	int sockfd,newsockfd;
 	int running = 1;
 	pthread_t clients[6];
-	
+	ThreadData threadData;
 	char * dirname = "data";
 	struct sockaddr_in serv_addr, cli_addr;
 	socklen_t clientlen;
@@ -504,8 +697,11 @@ void *listenReceive(void * port){
         		error("accept");
 		}else{
 			/*Spawn the client handler threads.*/
+			threadData->newsockfd = newsockfd;
+			threadData->dirname = dirname;
 			printf("REC: Client Connected.\n");
-			pthread_create(&clients[counter],0,handleClient(newsockfd,mainlist,dirname),NULL);
+			clientAdd(newsockfd,REC);
+			pthread_create(&clients[counter],0,receiveThread,(void*)threadData);
 			counter++;
 			
 		}
@@ -516,6 +712,7 @@ void *listenReceive(void * port){
 void *listenSend(void * port){
 	int portno = *((int*) port);
 	int sockfd,newsockfd;
+	ThreadData threadData;
 	int running = 1;
 	pthread_t clients[6];
 	char * dirname = "data";
@@ -542,7 +739,10 @@ void *listenSend(void * port){
 		}else{
 			/*Spawn the client handler threads.*/
 			printf("SEND:Client connected. Spawning thread.\n");
-			pthread_create(&clients[counter],0,handleClient(newsockfd,mainlist,dirname),NULL);
+			threadData->newsockfd = newsockfd;
+			threadData->dirname = dirname;
+			clientAdd(newsockfd,SEND);
+			pthread_create(&clients[counter],0,sendThread,(void*)threadData);
 			counter++;
 		}
 	
@@ -551,6 +751,7 @@ void *listenSend(void * port){
 
 int main(int argc, char** argv)
 {
+	/*Initialize shared datastructures*/
 	mainlist = CreateTimeList();
 	pthread_t listen,send;	
 	int sockfd,newsockfd, sportno,rportno;
