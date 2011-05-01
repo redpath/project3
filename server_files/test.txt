@@ -1,0 +1,307 @@
+CS352 Spring 2011 Project 2 – DUE DATE: Apr 1 , 2011 at 11:55pm
+SYNCHRONIZING FILES BETWEEN CLIENT & SERVER
+PROJECT DESCRIPTION
+For Project 2, you will extend your project 1 to synchronize all files in a folder between a client and a server. Every
+20 seconds, your client will check if there are any updates in the synchronized folder. If so, your client will send
+update messages to server. Otherwise, your client will send a Keep-Alive message to server and receive a Keep-
+Alive message from server.
+Your client should try to keep the socket to server permanently across update rounds. But if the socket is closed
+(because of networking failure ...) it will create another connection.
+For simplicity, you just need to updates files and discard subfolders in the synchronized folder. Therefore, there
+are 3 kinds of updates you need to control: (1) delete a file, (2) create a new file and (3) modify an existing file. For
+creating a new file or modifying an existing file, client will send the chunk packets to server for the new file or the
+modified file, as you did in the project 1. For deleting a file, client will send a deleting message to server. More
+details about updating the synchronized folder will be addressed the next sections.
+Besides updating files, your server needs to handle different behaviors of clients. Client may "lie" to server about
+chunk size in the chunk packet; or die during sending chunk packets; or forget to send the finished packet. During
+sending a file, client detect that the file is modified, then client sends an Abort message and will update the file in
+the next round.
+PROTOCOL
+You will implement a simple protocol to facilitate transfers of large files. Files will be transferred in chunks of little-
+endian binary data.
+Packet Types
+0x0001 : File Chunk
+0x0002 : Status Message
+0x0003 : Finished / Close File
+0x0004 : Abort File
+0x0005 : Delete File
+File Chunk packets (type 0x0001) will be preceded by a variable-length header with the following fields:
+-packet type (2 bytes, little-endian)
+-md5 checksum (16 bytes)
+-chunk size (4 bytes, little-endian)
+-filename length (2 bytes, little-endian)
+-filename
+* A typical File Chunk packet (assume 8 byte filename, 1024 byte chunk) might look like:
+Byte index: 0-1 2-17 18-21
+Field: [md5] [size] [filename length]
+[type]
+22-23
+24-31
+[filename]
+32-1055
+[chunk]
+* Finished/Closed File packet, Abort File packet, and Delete File packet (assume 8 byte filename, 1024 byte chunk)
+might look like:
+Byte index: 0-1 2-17
+Field: [md5] [filename length]
+[type]
+18-19
+24-27
+[filename]
+* Status Message packets (type 0x0002) will consist entirely of the following fields:
+-packet type (2 bytes, little-endian)
+-message code (2 bytes, little-endian)
+Message Codes
+0x0001 - Status OK
+0x0002 – Resend / Checksum Incorrect
+0x0004 – Resend / Invalid Chunk Size
+0x0008 - Abort after 3 incorrect checksums
+0x0010 - Abort after 3 invalid chunks
+0x0020 - No File To Delete
+0x8000 - Keep Alive Message
+COMMAND LINE FORMAT
+Client program:
+./client <servername> <serverport> <folder name> <chunksize>
+Server program:
+./server <listenport>
+PROGRAM BEHAVIOR
+The client program will store the last update status of the synchronized folder specified by <folder name> into a
+file named META-DATA in the Current Working Directory. At the first time, the META-DATA file should be sent
+from the server to the client. After every 20 seconds, your client will check if there are any updates in the
+synchronized folder, by comparing the current information of files in the synchronized folder with the information
+in the META-DATA file. If there are updates, your client will send update messages to server, and update the
+META-DATA file. Otherwise, your client will send a Keep-Alive message to server and receive a Keep-Alive message
+from server.
+Detecting changes in the synchronized folder:
+The META-DATA file contains information about the synchronized folder after the last update round. Basically, it
+has a set of entries, one entry per file and each entry contains the following information:
+struct meta_data_entry {
+int file_name_length;
+char [200] filename;
+int file_size;
+time_t modified_time;
+unsigned char update_status; // 1: Updated ; 0: Not updated
+}
+If a file exists in the synchronized folder and in the META-DATA file, and it has a new modified time, it means that
+this file has been modified since the last update round and need to be updated into the server.
+If a file exists in the synchronized folder but not in the META-DATA file, it’s a new file.
+If a file exists in the METADATA file, but not in the synchronized folder, this file need to be deleted.
+Client-Server communication
+The figure 1 and the figure 2 describe the finite-state machines for client and server, respectively. There are 2
+phases in client-server communication: the hand-shaking phase right after setting up TCP connection, and then the
+updating phase.
+1.
+Hand-shaking phase
+The server is listening on the port <listenport>. It also creates/updates the META-DATA file in the Current Working
+Directory by getting files information from the folder “<the Current Working Directory>/data”. If the folder “<the
+Current Working Directory>/data” is not existed, it will create one and then create an empty META-DATA file.
+The client will then connect to the server with <servername> on port <serverport> using TCP. Upon establishing a
+connection, the server will send the METADATA file to the client by only one Chunk packet (S1 in the figure 2).
+Upon receiving the METADATA file, client will check MD5 checksum; and send back the Status OK message if the
+check sum is OK (C4 in the figure 1). After sending the file, the server will send a "Finished" packet (S4); wait for
+another Status OK message from the client and then the updating phase will be starting.
+If the checksum for the METADATA file is incorrect, client will send a “Resend” response (C2); and the server will
+resend the META-DATA file. After three time of receiving “Resend” responses, server will close the connection to
+the client (S3).
+2.
+Updating phase
+After the hand-shaking phase is ok, the client will start the updating phase by sending updates to server every 20
+seconds. For creating a new file or modifying an existing file, client will send the chunk packets to server for the
+new file, as in the project 1(C9). After receiving a “Finish” packet for a file, server will update its META-DATA file,
+and send a Status OK message back to client (S9). Upon receiving this Status OK message, client will update its
+META-DATA file.
+For each received chunk, the server will compute the MD5 hash of the received data. If the hash does not match,
+the server will send a "Resend/Checksum Incorrect " packet. If the same chunk does not match after three
+attempts, the server will send an "Abort-after-3-incorrect-checksums" packet, close the file handle, and delete the
+file.
+For each received chunk, the server will check if the chunk size is correct. If the hash does not match, the server
+will send a "Resend/Invalid Chunk size " packet. If the same chunk does not match after three attempts, the server
+will send an "Abort-after-3-invalid-chunks" packet, close the file handle, and delete the file.
+If chunk size and MD5 checksum are ok, server will send a "Status OK" packet back to client. The server will write
+chunks to disk as it receives them until it receives a "Finished" packet from the client, at which point it will close
+the file handle and leave the file on disk.
+For deleting a file, client will send a Delete File packet to server. After receiving a “Delete File” packet for a file,
+server will delete the file in <Current Working Directory/data> and update its META-DATA file, then send a Status
+OK message back to client. Upon receiving this Status OK message, client will update its META-DATA file.
+3.
+Error Handling
+A) Client lies to server about chunk size in the chunk packet.
+The server will ask client to resend the chunk packet. After 3 wrong chunk packets the server will abort the current
+file and terminate the connection.
+B) Client dies during sending chunk packets.
+The server will abort the current transactions and delete the file.
+C) Client forgets to send the Finish packet.
+This is one of signs that client doesn’t follow the protocol, server will drop the connection after a timeout of 30
+seconds without receiving the Finish packet or receiving other packets instead of the Finish packet.
+D) Client aborts an updating file.
+During sending a file, client detect that the file is modified, then client sends an Abort message and will update the
+file in the next round. Server will delete the file in this transaction.
+IMPLEMENTATION STRATEGIES
+Step 1. Implement the handshaking phase
+It is similar as project 1, but you need to create/read the META-DATA at server side by reading the file information
+in the <Current Working Directory/data>.
+Step 2: Detect file updates
+Instead of wake up your client after 20s, control your client by hitting ‘S’ or ‘s’ for sleeping, ‘W’ or ‘w’ for waking it
+up.
+1. Put your client into sleep
+2. Create new file or deleting old file or modify existing files.
+3. Print out files needed to update and what kinds of updates.
+Step 3. Implement Keep-Alive message for NO UPDATE.
+1. Put your client into sleep.
+2. Wake up your client without any updates.
+3. Print out the Keep-Alive messages that are sent and received.
+Step 4: Implement Create/Modify files
+As similar as project 1.
+Step 5: Implement Deleting File
+1.
+2.
+3.
+Delete a file when the client is sleeping
+Wake up your client
+Use the command “ls” in the server to see if the server actually delete the file
+Step 6: Error Handling Cases
+A) Client lies to server about chunk size in the chunk packet.
+nd
+1. Create a malicious client that lies to server about chunk size in the 2 chunk packet. Then check if the client
+receives the ReSend message from server. And make sure everything is fine after the client resend the correct
+chunk packets.
+The command line for this client is: ./bad-client1 <servername> <serverport> <folder name> <chunksize>
+2. Create a malicious client that lies to server about chunk size in 3 continuous chunk packets. Then check if the
+client receives the ReSend message from server. And make sure the server will delete the file and terminal the
+connection.
+The command line for this client is: ./bad-client2 <servername> <serverport> <folder name> <chunksize>
+B) Client dies during sending chunk packets.
+Try to send a large file to server. During the transfer time, terminate the client. Make sure that the server will abort
+the current transactions and delete the file.
+C) Client forgets to send the finish packet.
+st
+1. Create a malicious client that forget to send the Finish packet for the 1 file in an update round, but send the
+chunk packet for other file. Create at least 2 files when client is sleeping. Make sure that server will terminal the
+nd
+connection after receiving the chunk packet for the 2 file.
+2. Rerun the above client, but create only one file when client is sleeping. Make sure that server will terminal the
+connection after the timeout of 30s.
+The command line for this client is: ./bad-client3 <servername> <serverport> <folder name> <chunksize>
+D) Client aborts an updating file.
+Try to send a large file from client to server, but at client side, open the file with READONLY flag. During transfer
+time, delete the file. It will cause a return error when client tries to read the deleted file. Make sure that client will
+send the Abort File message.
+Final Step: Integrate All Things Together
+Implement the finite-state machine for client and server and put the client into sleep after every update round.
+SUBMISSION
+-
+-
+Submit your project in .tar, .gz, .7z, .rar, or .zip format
+The content of submission should have:
+o Makefile
+o Readme/Write-up
+o Codes for client, server, bad-client1, bad-client2, bad-client3
+GRADING
+Your project 2 will be graded according to the following criteria:
+60%: Proper functionality
+- Build succeeds
+- Detect updates correctly
+- Create/Modify files correctly
+- Delete file correctly
+- Error handling properly
+20%: Code Quality
+- Correct use of sockets
+- Proper implementation of protocol
+- Correct handling of memory. Both client and server programs will be checked against valgrind for
+memory leaks.
+10%: Readme/writeup
+- Readme should explain exactly how to build your project
+- Explain issues encountered during development
+10%: Hand-in Organization
+- Submit your project in .tar, .gz, .7z, .rar, or .zip format
+- Include a makefile
+- Do not include object files or other intermediate build-related files
+- Do not include files related to version control
+Figure 1. THE FINITE STATE MACHINE FOR CLIENT
+Init
+C1. Setup
+connection to
+server
+C2. Send “ReSend”
+Wait for
+Meta-Data
+C3. Received the 3rd
+incorrect messages
+Failed Handshaking
+End
+C4. Send OK
+Sleep in 20s
+Wait for Finish-
+Meta-Data
+C8. Wake-Up
+C5. Start
+Updating Phase
+C7. Receive Keep-
+Alive
+Wait for Keep-
+Alive
+C15. Updated all files
+Have some files to
+update??
+C6. NO
+C12. Received Finish-OK
+C14. Received
+Delete-OK
+YES
+C9. Create/Modify
+Wait for
+Finish-OK
+C13. Delete
+Wait for
+Delete-OK
+Wait for
+Chunk-OK
+C11. Send Finish-File
+C10. Send Next Chunk
+Figure 2. THE FINITE STATE MACHINE FOR SERVER
+Init
+S2. Resend META-DATA
+S1. Send
+META-DATA
+Wait for
+MetaData-OK
+S3. Received the 3rd
+“RESEND” msg
+Failed Handshaking
+S4. Send Finish
+End
+S5. Received Keep-Alive / Send Keep-Alive
+Wait for Finish-
+OK
+S4b. Received Finish-OK
+Wait For File
+Updates
+S9. Received
+Finish msg
+S10. Received packet
+having incorrect
+chunksize OR wrong
+MD5 checksum.
+Wait for a chunk
+OR FinishMsg
+End
+S11. Received the
+3rd incorrect chunk
+OR Timeout for
+the FinishMsg
+st
+S7. Received 1 chunk
+S8. Received correct chunk
+S6. Received DeleteFile / Send
+Delete-OK or DeleteFailure
+
+
+Failed Handshaking
+End
+C4. Send OK
+Sleep in 20s
+Wait for Finish-
+Meta-Data
+C8. Wake-Up
+C5. Start
+Up

@@ -12,8 +12,28 @@ client.c
 */
 #include "header.h"
 
+#define NUM_THREADS 2
+
 pthread_mutex_t count_mutex     = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t condition_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct sendargs{
+	struct hostent * server;
+	int sockfd;
+	int port;
+	char * dir;
+	int chunksize;
+};
+
+struct sendargs sendingargs[NUM_THREADS];
+
+struct recargs{
+	int recsockfd;
+};
+struct recargs receivingargs[NUM_THREADS];
+
+pthread_t threads[NUM_THREADS];
+
 
 MetaStruct * CreateMetaStruct(int filnamesz, char * filename, time_t tm)
 {
@@ -457,15 +477,25 @@ void *tester2()
 	return NULL;
 }
 */
-/*
-void set_up_connection(void * arg)
+
+void *set_up_connection(void *threadarg)
 {
-	int send_sockfd, rec_sockfd, portno;
-	char * dirname;
-	int chunksz;
+	int sockfd;
+	int portno, cportno;
+
+	struct sendargs * sargs;
+
+	sargs= (struct sendargs *) threadarg;
+
+	sockfd = sargs->sockfd;
+	portno= sargs->port;
+	char * dirname = sargs->dir;
+	int chunksz = sargs->chunksize;
 
 	struct sockaddr_in serv_addr;
-	struct hostent * servername;
+	struct hostent * servername = sargs->server;
+
+
 	char * buffer;
 	
 	int timeout = 80;//seconds client will run for
@@ -475,30 +505,15 @@ void set_up_connection(void * arg)
 
 	int stopcount = 5;
 
-	set_up_connection(send_sockfd, &serv_addr, &servername, portno);
-
 	FILE * file;
 	DIR * directory;
 
 	FileTimesList * mainlist = CreateTimeList();
 
-    if (argc < 5) 
-	{	
-       fprintf(stderr,"Usage: %s <hostname> <port> <directory name> <chunksize>\n", argv[0]);
-		exit(0);
-	}
-    else
-	{	
-		portno = atoi(argv[2]);
-		dirname = argv[3];
-		chunksz = atoi(argv[4]);
-	}
+	printf("I'm in your threads, using ur pages\n");
 
-    if ((send_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
-        error("opening socket\n");
   
-    if ((servername = gethostbyname(argv[1])) == NULL) 
-        error("no such host\n");
+
 	
     memset((char *) &serv_addr, 0, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
@@ -507,15 +522,53 @@ void set_up_connection(void * arg)
 	
 	serv_addr.sin_port = htons(portno);
 	
-    if (connect(send_sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
+    if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
         error("connecting sender\n");
+	else
+		printf("its hammer time\n");
 
+
+	directory = opendir(dirname);//Open data directory
+	AcceptFile(sockfd, dirname); //take the incoming meta-data
+	AccumulateFileList(directory, mainlist);//Create File List
+	MetaListUpdate(mainlist);//Update the newly created File List 
+							 //according to the metadata
+	
+
+
+    UpdateServerFiles(mainlist, sockfd, chunksz, dirname);//Update the files on the server
+	
+	if(timeout != 0)
+	{ 
+		while(timeout > 0)
+		{
+			sleep(20);
+			SendKeepAlive(sockfd);
+			AccumulateFileList(directory, mainlist);
+			UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
+	    
+			timeout -= 20;
+		}
+	}
+	else
+	{
+		while(1)
+		{
+			sleep(20);
+			SendKeepAlive(sockfd);
+			AccumulateFileList(directory, mainlist);
+			UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
+		}
+	}
 }
-*/
+
 int main(int argc, char** argv)
 {
 
-	int send_sockfd, rec_sockfd, portno;
+	int send_sockfd, rec_sockfd;
+	int sendportno, recportno;
+	int retcode1, retcode2;
+
 	char * dirname;
 	int chunksz;
 
@@ -530,46 +583,58 @@ int main(int argc, char** argv)
 
 	int stopcount = 5;
 
-	set_up_connection(send_sockfd, &serv_addr, &servername, portno);
-
 	FILE * file;
 	DIR * directory;
 
 	FileTimesList * mainlist = CreateTimeList();
 
+    if ((send_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+        error("opening socket\n");
+
+    if ((rec_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+        error("opening socket\n");
 
 
-
-    if (argc < 5) 
+    if (argc < 6) 
 	{	
-       fprintf(stderr,"Usage: %s <hostname> <port> <directory name> <chunksize>\n", argv[0]);
+       fprintf(stderr,"Usage: %s <hostname> <sendport> <receiveport> <directory name> <chunksize>\n", argv[0]);
 		exit(0);
 	}
     else
 	{	
-		portno = atoi(argv[2]);
-		dirname = argv[3];
-		chunksz = atoi(argv[4]);
+
+    	if ((servername = gethostbyname(argv[1])) == NULL) 
+        	error("no such host\n");
+
+    	sendportno = atoi(argv[2]);	// convert the port no to an integer
+    	recportno = atoi(argv[3]);	// convert the port no to an integer
+		dirname = argv[4];
+		chunksz = atoi(argv[5]);
 	}
 
-    if ((send_sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
-        error("opening socket\n");
-  
-    if ((servername = gethostbyname(argv[1])) == NULL) 
-        error("no such host\n");
-	
-    memset((char *) &serv_addr, 0, sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	
-	memcpy((char *)&serv_addr.sin_addr.s_addr,(char *)servername->h_addr, servername->h_length);
-	
-	serv_addr.sin_port = htons(portno);
-	
-    if (connect(send_sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
-        error("connecting sender\n");
+	//pthread_mutex_init(&counterLock,0);
+
+	sendingargs[0].server = servername;
+	sendingargs[0].sockfd = send_sockfd;
+	sendingargs[0].port = sendportno;
+	sendingargs[0].dir = argv[4];
+	sendingargs[0].chunksize = chunksz;  
+
+	sendingargs[1].server = servername;
+	sendingargs[1].sockfd = rec_sockfd;
+	sendingargs[1].port = recportno;
+	sendingargs[1].dir = argv[4];
+	sendingargs[1].chunksize = chunksz;  
+
+	printf("creating thread 0\n");
+	retcode1 = pthread_create(&threads[0], NULL, set_up_connection, (void *) &sendingargs[0]);
+	//receivingargs[0].recsockfd = rec_sockfd;
+
+	printf("creating thread 1\n");
+	retcode2 = pthread_create(&threads[1], NULL, set_up_connection, (void *) &sendingargs[1]);
 
 
-
+/*
 	directory = opendir(dirname);//Open data directory
 	AcceptFile(send_sockfd, dirname); //take the incoming meta-data
 	AccumulateFileList(directory, mainlist);//Create File List
@@ -602,16 +667,10 @@ int main(int argc, char** argv)
 			UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);
 		}
 	}
-	    
-	
+*/	    
+	pthread_join( threads[0], NULL);
+	//pthread_join( thread_rec, NULL);
+
 	return 0;
 }
 
-
-	//pthread_t thread1, thread2;
-
-	//pthread_create( &thread1, NULL, &tester, NULL);
-    //pthread_create( &thread2, NULL, &tester2, NULL);
-
-   // pthread_join( thread1, NULL);
-   // pthread_join( thread2, NULL);
