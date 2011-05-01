@@ -14,23 +14,25 @@ client.c
 
 #define NUM_THREADS 2
 
+#define S_THREAD 0
+#define R_THREAD 1
+
 pthread_mutex_t count_mutex     = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t condition_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-struct sendargs{
+pthread_mutex_t lock;
+
+struct t_args{
 	struct hostent * server;
 	int sockfd;
 	int port;
 	char * dir;
 	int chunksize;
+	int thread_id;
 };
 
-struct sendargs sendingargs[NUM_THREADS];
+struct t_args state_struct[NUM_THREADS];
 
-struct recargs{
-	int recsockfd;
-};
-struct recargs receivingargs[NUM_THREADS];
 
 pthread_t threads[NUM_THREADS];
 
@@ -179,6 +181,7 @@ int AcceptFile(int acceptedsock, char * dirname)
 	md = EVP_get_digestbyname("MD5");  // "md5"
 	
 	short int stattype = 2;
+	short int reqtype = 6;
 	short int resmes = 2;
 	short int okmes = 1;
 	char mdval[16];
@@ -420,6 +423,8 @@ void SendNumFiles(int sockfd, FileTimesList * list)
 void UpdateServerFiles(FileTimesList * list, int sockfd, int chunksz, char * dirname)
 {
 	FileTimeNode * ptr = list->head;
+	printf("locking updater\n");
+	pthread_mutex_lock( &condition_mutex );
 	SendNumFiles(sockfd, list);
 	while(ptr != NULL)
 	{
@@ -430,6 +435,8 @@ void UpdateServerFiles(FileTimesList * list, int sockfd, int chunksz, char * dir
 		}
 		ptr = ptr->next;
 	}
+	pthread_mutex_unlock( &condition_mutex );
+	pthread_cond_signal( &condition_cond );
 	
 }
 
@@ -443,57 +450,23 @@ void SendKeepAlive(int sockfd)
   memcpy((void*)(keepbuf + 2), (void*)&keepal, 2);
   write(sockfd, keepbuf, 4);
 }
-/*
-test[20];
-void *tester()
-{
-	int x=1;
-	while(1)
-	{
-	pthread_mutex_lock( &condition_mutex );
-		 printf("before %s\n",test);
-		x++;
-         pthread_cond_wait( &condition_cond, &condition_mutex );
-      printf("the current value of it is %s\n",test);
-      pthread_mutex_unlock( &condition_mutex );
-	}
-	
-}
-void *tester2()
-{
-	while(1)
-	{
-	pthread_mutex_lock( &condition_mutex );
-	
-	
-	scanf("%s",test);
-	
-	  
-	pthread_mutex_unlock( &condition_mutex );
-	pthread_cond_signal( &condition_cond );
-	
-	scanf("%s",test);
-	}
-	return NULL;
-}
-*/
 
 void *set_up_connection(void *threadarg)
 {
 	int sockfd;
 	int portno, cportno;
 
-	struct sendargs * sargs;
+	struct t_args * loc_t_args;
 
-	sargs= (struct sendargs *) threadarg;
+	loc_t_args= (struct t_args *) threadarg;
 
-	sockfd = sargs->sockfd;
-	portno= sargs->port;
-	char * dirname = sargs->dir;
-	int chunksz = sargs->chunksize;
+	sockfd = loc_t_args->sockfd;
+	portno= loc_t_args->port;
+	char * dirname = loc_t_args->dir;
+	int chunksz = loc_t_args->chunksize;
 
 	struct sockaddr_in serv_addr;
-	struct hostent * servername = sargs->server;
+	struct hostent * servername = loc_t_args->server;
 
 
 	char * buffer;
@@ -509,11 +482,6 @@ void *set_up_connection(void *threadarg)
 	DIR * directory;
 
 	FileTimesList * mainlist = CreateTimeList();
-
-	printf("I'm in your threads, using ur pages\n");
-
-  
-
 	
     memset((char *) &serv_addr, 0, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
@@ -525,28 +493,40 @@ void *set_up_connection(void *threadarg)
     if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) 
         error("connecting sender\n");
 	else
-		printf("its hammer time\n");
+		printf("Connected \n");
 
 
-	directory = opendir(dirname);//Open data directory
-	AcceptFile(sockfd, dirname); //take the incoming meta-data
-	AccumulateFileList(directory, mainlist);//Create File List
-	MetaListUpdate(mainlist);//Update the newly created File List 
-							 //according to the metadata
+
+	if((loc_t_args->thread_id) == 0) directory = opendir(dirname);
+
+	if((loc_t_args->thread_id) == 0) AcceptFile(sockfd, dirname); 
+	//take the incoming meta-data
+	
+	if((loc_t_args->thread_id) == 0) 
+	{
+		//directory = opendir(dirname);
+		AccumulateFileList(directory, mainlist);
+	}
+	//Create File List
+
+	if((loc_t_args->thread_id) == 0)MetaListUpdate(mainlist);
+	//Update the newly created File List according to the metadata
+	
+	if((loc_t_args->thread_id) == 0)UpdateServerFiles(mainlist, sockfd, chunksz, dirname);//Update the files on the server
 	
 
 
-    UpdateServerFiles(mainlist, sockfd, chunksz, dirname);//Update the files on the server
-	
 	if(timeout != 0)
 	{ 
 		while(timeout > 0)
 		{
 			sleep(20);
 			SendKeepAlive(sockfd);
-			AccumulateFileList(directory, mainlist);
-			UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
-	    
+			if((loc_t_args->thread_id) == 0)
+			{
+				AccumulateFileList(directory, mainlist);
+				UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
+	    	}
 			timeout -= 20;
 		}
 	}
@@ -556,10 +536,27 @@ void *set_up_connection(void *threadarg)
 		{
 			sleep(20);
 			SendKeepAlive(sockfd);
-			AccumulateFileList(directory, mainlist);
-			UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
+			if((loc_t_args->thread_id) == 0)
+			{
+				AccumulateFileList(directory, mainlist);
+				UpdateServerFiles(mainlist, sockfd, chunksz, dirname);
+			}
 		}
 	}
+
+}
+	int write_state(int tid, struct hostent * sname, int sockfd, int port, char* dir, int chunksz)
+{
+	state_struct[tid].server = sname;
+	state_struct[tid].sockfd = sockfd;
+
+	state_struct[tid].port = port;
+	state_struct[tid].dir = dir;
+
+	state_struct[tid].chunksize = chunksz;  
+	state_struct[tid].thread_id = tid;
+
+	return 0;
 }
 
 int main(int argc, char** argv)
@@ -576,13 +573,15 @@ int main(int argc, char** argv)
 	struct hostent * servername;
 	char * buffer;
 	
-	int timeout = 80;//seconds client will run for
+	int timeout = 80;
 
 	char abortbuf[4];
 	char mdsig[16];
 
 	int stopcount = 5;
 
+	pthread_mutex_init(&lock, NULL);
+	
 	FILE * file;
 	DIR * directory;
 
@@ -606,70 +605,27 @@ int main(int argc, char** argv)
     	if ((servername = gethostbyname(argv[1])) == NULL) 
         	error("no such host\n");
 
-    	sendportno = atoi(argv[2]);	// convert the port no to an integer
-    	recportno = atoi(argv[3]);	// convert the port no to an integer
+    	sendportno = atoi(argv[2]);	// convert to int
+    	recportno = atoi(argv[3]);	// convert to int
 		dirname = argv[4];
 		chunksz = atoi(argv[5]);
 	}
 
-	//pthread_mutex_init(&counterLock,0);
+	//assignment statements
 
-	sendingargs[0].server = servername;
-	sendingargs[0].sockfd = send_sockfd;
-	sendingargs[0].port = sendportno;
-	sendingargs[0].dir = argv[4];
-	sendingargs[0].chunksize = chunksz;  
-
-	sendingargs[1].server = servername;
-	sendingargs[1].sockfd = rec_sockfd;
-	sendingargs[1].port = recportno;
-	sendingargs[1].dir = argv[4];
-	sendingargs[1].chunksize = chunksz;  
-
-	printf("creating thread 0\n");
-	retcode1 = pthread_create(&threads[0], NULL, set_up_connection, (void *) &sendingargs[0]);
-	//receivingargs[0].recsockfd = rec_sockfd;
-
-	printf("creating thread 1\n");
-	retcode2 = pthread_create(&threads[1], NULL, set_up_connection, (void *) &sendingargs[1]);
+	write_state(S_THREAD, servername, send_sockfd, sendportno, dirname, chunksz);
+	write_state(R_THREAD, servername, rec_sockfd, recportno, dirname, chunksz);
 
 
-/*
-	directory = opendir(dirname);//Open data directory
-	AcceptFile(send_sockfd, dirname); //take the incoming meta-data
-	AccumulateFileList(directory, mainlist);//Create File List
-	MetaListUpdate(mainlist);//Update the newly created File List 
-							 //according to the metadata
-	
+	printf("Creating thread 0\n");
+	retcode1 = pthread_create(&threads[0], NULL, set_up_connection, (void *) &state_struct[0]);
+
+	printf("Creating thread 1\n");
+	retcode2 = pthread_create(&threads[1], NULL, set_up_connection, (void *) &state_struct[1]);
 
 
-    UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);//Update the files on the server
-	
-	if(timeout != 0)
-	{ 
-		while(timeout > 0)
-		{
-			sleep(20);
-			SendKeepAlive(send_sockfd);
-			AccumulateFileList(directory, mainlist);
-			UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);
-	    
-			timeout -= 20;
-		}
-	}
-	else
-	{
-		while(1)
-		{
-			sleep(20);
-			SendKeepAlive(send_sockfd);
-			AccumulateFileList(directory, mainlist);
-			UpdateServerFiles(mainlist, send_sockfd, chunksz, dirname);
-		}
-	}
-*/	    
 	pthread_join( threads[0], NULL);
-	//pthread_join( thread_rec, NULL);
+	pthread_join( threads[1], NULL);
 
 	return 0;
 }

@@ -295,7 +295,6 @@ S8. Received correct chunk
 S6. Received DeleteFile / Send
 Delete-OK or DeleteFailure
 
-<<<<<<< HEAD
 
 Failed Handshaking
 End
@@ -306,14 +305,3 @@ Meta-Data
 C8. Wake-Up
 C5. Start
 Up
-=======
-chunk
-OR FinishMsg
-End
-S11. Received the
-3rd incorrect chunk
-OR Timeout for
-the FinishMsg
-st
-S7. Rec
->>>>>>> d3e51da0de3f44e5d4b8f3d2b0da231db334266e
